@@ -2,7 +2,15 @@ package shutdown
 
 import (
 	"context"
+	"fmt"
 	"sync"
+)
+
+var (
+	//ErrSoftStopSignalled can be used to identify whether the context was cancelled via a soft stop.
+	ErrSoftStopSignalled = fmt.Errorf("soft stop signal: %w", context.Canceled)
+	//ErrHardStopSignalled can be used to identify whether the context was cancelled via a hard stop.
+	ErrHardStopSignalled = fmt.Errorf("hard stop signal: %w", context.Canceled)
 )
 
 // Signaller is a mechanism owned by components that support graceful
@@ -101,6 +109,33 @@ func (s *Signaller) SoftStopCtx(ctx context.Context) (context.Context, context.C
 	return ctx, cancel
 }
 
+// SoftStopCtxWithCause returns a context.Context that will be terminated when
+// either the provided context is cancelled or the signal to soft or hard stop
+// has been made. The returned CancelCauseFunc allows specifying a cause when
+// cancelling manually.
+func (s *Signaller) SoftStopCtxWithCause(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+	var cancel context.CancelCauseFunc
+	ctx, cancel = context.WithCancelCause(ctx)
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel(context.Cause(ctx))
+		case <-s.softStopChan:
+			// Inline check if hard stop is also signalled to use the correct cause, narrowing
+			// the race condition window of IsHardStopSignalled function call to one atomic operation.
+			select {
+			case <-s.hardStopChan:
+				cancel(ErrHardStopSignalled)
+			default:
+				cancel(ErrSoftStopSignalled)
+			}
+		case <-s.hardStopChan:
+			cancel(ErrHardStopSignalled)
+		}
+	}()
+	return ctx, cancel
+}
+
 // IsHardStopSignalled returns true if the signaller has received the signal to
 // hard stop.
 func (s *Signaller) IsHardStopSignalled() bool {
@@ -129,6 +164,24 @@ func (s *Signaller) HardStopCtx(ctx context.Context) (context.Context, context.C
 		case <-s.hardStopChan:
 		}
 		cancel()
+	}()
+	return ctx, cancel
+}
+
+// HardStopCtxWithCause returns a context.Context that will be terminated when
+// either the provided context is cancelled or the signal to hard stop has been
+// made. The returned CancelCauseFunc allows specifying a cause when cancelling
+// manually.
+func (s *Signaller) HardStopCtxWithCause(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+	var cancel context.CancelCauseFunc
+	ctx, cancel = context.WithCancelCause(ctx)
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel(context.Cause(ctx))
+		case <-s.hardStopChan:
+			cancel(ErrHardStopSignalled)
+		}
 	}()
 	return ctx, cancel
 }

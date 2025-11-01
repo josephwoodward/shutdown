@@ -2,6 +2,7 @@ package shutdown
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -205,4 +206,105 @@ func TestSignallerHasClosedCtx(t *testing.T) {
 	assertClosed(t, ctx.Done())
 	done()
 	inDone()
+}
+
+func TestSignallerAtLeisureCtxWithCause(t *testing.T) {
+	s := NewSignaller()
+	customErr := errors.New("custom error")
+
+	// Cancelled from original context
+	inCtx, inDoneWithCause := context.WithCancelCause(context.Background())
+	ctx, done := s.SoftStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	inDoneWithCause(customErr)
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, customErr, context.Cause(ctx))
+	done(nil)
+
+	// Cancelled from returned cancel func
+	inCtx, inDoneWithCause = context.WithCancelCause(context.Background())
+	ctx, done = s.SoftStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	done(customErr)
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, customErr, context.Cause(ctx))
+	inDoneWithCause(nil)
+
+	// Cancelled from at leisure signal
+	inCtx, inDone := context.WithCancel(context.Background())
+	ctx, done = s.SoftStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	s.TriggerSoftStop()
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, ErrSoftStopSignalled, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.ErrorIs(t, context.Cause(ctx), context.Canceled)
+	assert.ErrorIs(t, context.Cause(ctx), ErrSoftStopSignalled)
+	done(nil)
+	inDone()
+
+	// Cancelled from at immediate signal
+	inCtx, inDoneWithCause = context.WithCancelCause(context.Background())
+	s = NewSignaller()
+	ctx, done = s.SoftStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	s.TriggerHardStop()
+	assert.True(t, s.IsHardStopSignalled())
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, ErrHardStopSignalled, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.ErrorIs(t, context.Cause(ctx), context.Canceled)
+	assert.ErrorIs(t, context.Cause(ctx), ErrHardStopSignalled)
+	done(nil)
+	inDoneWithCause(nil)
+}
+
+func TestSignallerNowCtxWithCause(t *testing.T) {
+	s := NewSignaller()
+	customErr := errors.New("custom error")
+
+	// Cancelled from original context
+	inCtx, inDone := context.WithCancelCause(context.Background())
+	ctx, done := s.HardStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	inDone(customErr)
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, customErr, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	done(nil)
+
+	// Cancelled from returned cancel func
+	inCtx, inDone = context.WithCancelCause(context.Background())
+	ctx, done = s.HardStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	done(customErr)
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, customErr, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	inDone(nil)
+
+	// Not cancelled from at leisure signal
+	inCtx, inDone = context.WithCancelCause(context.Background())
+	ctx, done = s.HardStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	s.TriggerSoftStop()
+	assertOpen(t, ctx.Done())
+	done(customErr)
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, customErr, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.NotEqual(t, ErrSoftStopSignalled, context.Cause(ctx))
+	inDone(nil)
+
+	// Cancelled from at immediate signal
+	inCtx, inDone = context.WithCancelCause(context.Background())
+	ctx, done = s.HardStopCtxWithCause(inCtx)
+	assertOpen(t, ctx.Done())
+	s.TriggerHardStop()
+	assertClosed(t, ctx.Done())
+	assert.Equal(t, ErrHardStopSignalled, context.Cause(ctx))
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.ErrorIs(t, context.Cause(ctx), context.Canceled)
+	done(nil)
+	inDone(nil)
 }
